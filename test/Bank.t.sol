@@ -1,92 +1,83 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.13;
+pragma solidity ^0.8.28;
 
-import "forge-std/Test.sol";
-import "forge-std/console2.sol";
-import "src/Bank.sol";
+import { Test, console2 } from "forge-std/Test.sol";
+import { Bank } from "../src/Bank.sol";
 
 contract BankTest is Test {
     Bank public bank;
+    address public owner;
+    address public alice;
+    address public bob;
 
+    // setup test environment
     function setUp() public {
+        owner = makeAddr("owner");
+        alice = makeAddr("alice");
+        bob = makeAddr("bob");
+
+        vm.prank(owner);
         bank = new Bank();
-
-        // get code size
-        uint256 codeSize;
-        address bankAddr = address(bank);
-        assembly {
-            codeSize := extcodesize(bankAddr)
-        }
-        console2.log("[before]: codeSize", codeSize);
     }
 
-    // receive function to receive ETH
-    receive() external payable { }
-
-    function testDeposit() public {
-        address user = makeAddr("user");
-        vm.deal(user, 1 ether);
-        vm.prank(user);
-        bank.deposit{ value: 0.5 ether }();
-        assertEq(bank.balances(user), 0.5 ether);
+    // test initial state
+    function test_InitialState() public {
+        assertEq(bank.owner(), owner);
     }
 
-    function testWithdraw() public {
-        address bankAdmin = bank.admin();
-        vm.deal(address(bankAdmin), 1 ether);
-        vm.deal(address(bank), 1 ether);
-        uint256 initialBalance = bankAdmin.balance;
-
-        vm.prank(bankAdmin);
-        bank.withdraw(1 ether);
-
-        assertEq(bankAdmin.balance, initialBalance + 1 ether);
+    // test transfer ownership
+    function test_TransferOwnership() public {
+        vm.prank(owner);
+        bank.transferOwnership(alice);
+        assertEq(bank.owner(), alice);
     }
 
-    function testFailWithdrawNotAdmin() public {
-        vm.deal(address(bank), 1 ether);
-        vm.prank(makeAddr("user"));
-        bank.withdraw(0.5 ether);
+    // test transfer ownership not owner
+    function testFail_TransferOwnershipNotOwner() public {
+        vm.prank(alice);
+        bank.transferOwnership(bob);
     }
 
-    function testTopDepositors() public {
-        address user1 = makeAddr("user1");
-        address user2 = makeAddr("user2");
-        address user3 = makeAddr("user3");
-
-        vm.deal(user1, 1 ether);
-        vm.deal(user2, 2 ether);
-        vm.deal(user3, 3 ether);
-
-        vm.prank(user1);
-        bank.deposit{ value: 0.5 ether }();
-        vm.prank(user2);
-        bank.deposit{ value: 1 ether }();
-        vm.prank(user3);
-        bank.deposit{ value: 1.5 ether }();
-
-        address[3] memory topDepositors = bank.getTopDepositors();
-        assertEq(topDepositors[0], user3);
-        assertEq(topDepositors[1], user2);
-        assertEq(topDepositors[2], user1);
+    // test transfer ownership to zero address
+    function testFail_TransferOwnershipToZeroAddress() public {
+        vm.prank(owner);
+        bank.transferOwnership(address(0));
     }
 
-    function testDestroy() public {
-        // ensure contract has some ETH for testing
-        vm.deal(address(bank), 1 ether);
+    // test transfer ownership event
+    function test_TransferOwnershipEvent() public {
+        vm.prank(owner);
+        vm.expectEmit(true, true, false, false);
+        emit Bank.OwnershipTransferred(owner, alice);
+        bank.transferOwnership(alice);
+    }
 
-        // create a recipient address
-        address payable recipient = payable(makeAddr("recipient"));
-        uint256 initialBalance = recipient.balance;
+    // test receive ether
+    function test_ReceiveEther() public {
+        uint256 amount = 1 ether;
+        hoax(alice, amount);
 
-        // record contract's initial balance
-        uint256 bankBalance = address(bank).balance;
+        // send ether to contract
+        (bool success,) = address(bank).call{ value: amount }("");
+        assertTrue(success);
 
-        // call destroy function
-        bank.destroy(recipient);
+        // verify contract balance
+        assertEq(address(bank).balance, amount);
+    }
 
-        // verify:
-        // 1. recipient should receive all ETH
-        assertEq(recipient.balance, initialBalance + bankBalance);
+    // test onlyOwner modifier
+    function test_OnlyOwnerModifier() public {
+        vm.expectRevert(abi.encodeWithSelector(Bank.OwnableUnauthorizedAccount.selector, alice));
+        vm.prank(alice);
+        bank.transferOwnership(bob);
+    }
+
+    // fuzzing: transfer ownership
+    function testFuzz_TransferOwnership(address newOwner) public {
+        vm.assume(newOwner != address(0));
+
+        vm.prank(owner);
+        bank.transferOwnership(newOwner);
+        assertEq(bank.owner(), newOwner);
     }
 }
